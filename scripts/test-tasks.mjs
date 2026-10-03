@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PwshTaskRuntime, renameWithRetry } from "../src/task-runtime.ts";
 import { mutateMetadataSnapshots, readLatestMetadataSnapshot } from "../src/task-metadata-store.mjs";
-import { validate, DESCRIPTION, PROMPT_GUIDELINE, PwshParams, taskDetails, taskText } from "../src/index.ts";
+import { validate, DESCRIPTION, PROMPT_GUIDELINE, PwshParams, taskDetails, taskText, waitGuidance } from "../src/index.ts";
 import { TaskNotificationManager } from "../src/task-notifications.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "pi-pwsh-test-"));
@@ -224,6 +224,22 @@ assert.doesNotMatch(taskText(commandFailure, infraPath), /diagnosticsPath/);
 const signalFailure = { metadata: { ...modelMeta, status: "failed", exitCode: null, error: "PowerShell exited after signal SIGTERM" }, ready: false, output: "", omittedBytes: 0 };
 assert.match(taskText(signalFailure, infraPath), /error: PowerShell exited after signal SIGTERM/);
 assert.doesNotMatch(taskText(signalFailure, infraPath), /diagnosticsPath/);
+
+// A running snapshot is neither a failure nor a reason to poll: the task
+// reports its own completion, so another wait only burns a round trip. The text
+// stays silent once nothing is left to wait for, and explains a released wait
+// instead, because that result contradicts the window the caller asked for.
+const waiting = { ...running, ready: false };
+assert.match(waitGuidance(waiting, false), /Do not poll it/);
+assert.match(waitGuidance(waiting, false), /keeps running in the background/);
+assert.match(waitGuidance(waiting, false), /completion, failure, or cancellation will be reported automatically/);
+assert.match(waitGuidance(running, false), /Do not poll it/, "a wait: 0 and a readiness result use the same guidance");
+assert.equal(waitGuidance(successful, false), "", "a terminal snapshot needs no guidance");
+assert.equal(waitGuidance(commandFailure, false), "", "a failed snapshot needs no guidance");
+assert.equal(waitGuidance(cancelled, false), "", "a cancelled snapshot needs no guidance");
+assert.match(waitGuidance(waiting, true), /do not immediately wait again/, "the released-wait message replaces the still-running message");
+assert.match(DESCRIPTION, /do not answer a still-running snapshot with another wait/);
+assert.match(PwshParams.properties.wait.description, /never a reason to wait again/);
 
 // A launcher failure after task-directory allocation leaves real, useful
 // diagnostics behind and names that existing location in the thrown error.

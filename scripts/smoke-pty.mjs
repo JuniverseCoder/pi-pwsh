@@ -180,9 +180,22 @@ try {
 
 	const immediate = await execute({ command: "Start-Sleep -Milliseconds 1500; Write-Output TASK_ID_DEFAULT_WAIT", wait: 0 });
 	assert.match(immediate.details.status, /^(?:starting|running)$/);
+	assert.match(immediate.content[0].text, /Do not poll it/, "the guidance does not depend on why the window ended");
 	const waitedByTaskId = await execute({ taskId: immediate.details.taskId });
 	assert.equal(waitedByTaskId.details.status, "completed");
 	assert.match(waitedByTaskId.details.output, /TASK_ID_DEFAULT_WAIT/);
+	assert.doesNotMatch(waitedByTaskId.content[0].text, /Do not poll it/, "a wait that reaches a terminal status needs no guidance");
+
+	// A task that outlives its window must hand back the still-running guidance
+	// rather than a bare snapshot the model reads as an unfinished tool call.
+	const expiring = await execute({ command: "Start-Sleep -Seconds 30", wait: 1 });
+	try {
+		assert.match(expiring.details.status, /^(?:starting|running)$/);
+		assert.equal(expiring.details.backgrounded, undefined);
+		assert.match(expiring.content[0].text, /Do not poll it/);
+	} finally {
+		await execute({ taskId: expiring.details.taskId, stop: true });
+	}
 
 	const selectedObject = await run("Write-Output 'before'; [pscustomobject]@{Name='x';State='y'} | Select-Object Name, State; Write-Output 'after'");
 	assert.match(selectedObject, /before/);
